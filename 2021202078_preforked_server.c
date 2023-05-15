@@ -51,16 +51,17 @@ int request;
 struct ClientInfo client_info[10];
 
 void printServerHistory(int sig);
-void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo client_info);
+void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info);
+void shiftSturct();
 void sendResponse(char* url, char* response_header, int isNotStart, int client_fd);
-void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file);
+void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file, char* sendArray);
 void getAbsolutePath(char *inputPath, char *absolutePath);
 void joinPathAndFileName(char* path, char* Apath, char* fileName);
 void sortByNameInAscii(char **fileList, int fileNum, int start, int r_reverse);
-void printPermissions(mode_t mode, FILE *file);
-void printType(struct stat fileStat, FILE *file);
+void printPermissions(mode_t mode, FILE *file, char* sendArray);
+void printType(struct stat fileStat, FILE *file, char* sendArray);
 void findColor(char* fileName, char* color);
-void printAttributes(struct stat fileStat, FILE *file, int h_readable, char *color);
+void printAttributes(struct stat fileStat, FILE *file, int h_readable, char *color, char* sendArray);
 int compareStringUpper(char* fileName1, char* fileName2);
 int writeHTMLFile(char* url, char* sendArray);
 int isAccesible(char* inputIP, char* response_header, int client_fd);
@@ -105,6 +106,7 @@ int main() {
     }
     
     signal(SIGALRM, printServerHistory);
+    alarm(10);
 
     while(1) {
         
@@ -119,7 +121,6 @@ int main() {
 
         len = sizeof(client_addr); //클라이언트의 주소 길이 저장
         client_fd = accept(socket_fd, (struct sockaddr*)&client_addr, &len); //클라이언트로부터 요청 받음
-        alarm(10);
 
         if(client_fd < 0) {
             printf("Server : accept failed\n"); //연결 요청 실패 시
@@ -167,12 +168,12 @@ int main() {
             ++request; //누적 접속 기록 개수 증가
 
             if(request < 11) {
-                saveConnectHistory(client_addr, client_info[request -1]);
+                saveConnectHistory(client_addr, &client_info[request -1]);
             }
 
             else {
-                pushSturct();
-                saveConnectHistory(client_addr, client_info[9]);
+                shiftSturct();
+                saveConnectHistory(client_addr, &client_info[9]);
             }
             
             int *status;
@@ -185,6 +186,72 @@ int main() {
     }
     close(socket_fd); //socket descriptor close
     return 0; //프로그램 종료
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// saveConnectHistory                                                                //
+// --------------------------------------------------------------------------------- //
+// Input: struct sockaddr_in client_addr -> The address of the connected client.     //
+// output:                                                                           //
+// purpose: Store the 10 most recent connection records. The connection record       //
+//          should include the client connection number, IP address, port number,    //
+//          process IP executed, and the time when the server and client were        //
+//          connected.                                                               //
+///////////////////////////////////////////////////////////////////////////////////////
+void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info) {
+
+    struct tm *lt;
+    time_t t;
+    char temp[BUFSIZE];
+    
+    strcpy(client_info->IP, inet_ntoa(client_addr.sin_addr));
+    client_info->No = request;
+    client_info->PID = getpid();
+    client_info->Port = ntohs(client_addr.sin_port);
+    
+    time(&t);
+    lt = localtime(&t);
+    strftime(temp, 1024, "%c", lt);
+    strcpy(client_info->TIME, temp);
+}
+
+void shiftSturct() {
+
+    for(int i = 0; i < 10; i++) {
+        client_info[i].No = client_info[i+1].No;
+        client_info[i].Port = client_info[i+1].Port;
+        client_info[i].PID = client_info[i+1].PID;
+        strcpy(client_info[i].IP, client_info[i+1].IP);
+        strcpy(client_info[i].TIME, client_info[i+1].TIME);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////
+// printServerHistory                                                                //
+// --------------------------------------------------------------------------------- //
+// Input:                                                                            //
+// output:                                                                           //
+// purpose: Store the 10 most recent connection records. The connection record       //
+//          should include the client connection number, IP address, port number,    //
+//          process IP executed, and the time when the server and client were        //
+//          connected.                                                               //
+///////////////////////////////////////////////////////////////////////////////////////
+void printServerHistory(int sig) {
+
+    printf("========= Connection History ===================================\n");    
+    printf("Number of request(s) : %d\n", request); //누적 접근 수 출력
+    if(request > 0) { //만약 1번 이상 클라이언트가 접근한 적이 있으면
+        printf("No.\tIP\t\tPID\tPORT\tTIME\n");
+        
+        int n = request;
+        if(request > 10)
+            n = 10;
+
+        for(int i = 0; i < n; i++) 
+            printf("%d\t%s\t%d\t%d\t%s\n", client_info[i].No, client_info[i].IP, client_info[i].PID, client_info[i].Port, client_info[i].TIME);
+    }
+    printf("================================================================\n");
+    alarm(10);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -226,71 +293,6 @@ int isAccesible(char* inputIP, char* response_header, int client_fd) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
-// printServerHistory                                                                //
-// --------------------------------------------------------------------------------- //
-// Input:                                                                            //
-// output:                                                                           //
-// purpose: Store the 10 most recent connection records. The connection record       //
-//          should include the client connection number, IP address, port number,    //
-//          process IP executed, and the time when the server and client were        //
-//          connected.                                                               //
-///////////////////////////////////////////////////////////////////////////////////////
-void printServerHistory(int sig) {
-
-    printf("========= Connection History ===================================\n");    
-    printf("Number of request(s) : %d\n", request); //누적 접근 수 출력
-    if(request > 0) { //만약 1번 이상 클라이언트가 접근한 적이 있으면
-        printf("No.\tIP\t\tPID\tPORT\tTIME\n");
-        
-        int n = request;
-        if(request > 10)
-            n = 10;
-
-        
-    }
-    printf("================================================================\n");
-    alarm(10);
-}
-
-///////////////////////////////////////////////////////////////////////////////////////
-// saveConnectHistory                                                                //
-// --------------------------------------------------------------------------------- //
-// Input: struct sockaddr_in client_addr -> The address of the connected client.     //
-// output:                                                                           //
-// purpose: Store the 10 most recent connection records. The connection record       //
-//          should include the client connection number, IP address, port number,    //
-//          process IP executed, and the time when the server and client were        //
-//          connected.                                                               //
-///////////////////////////////////////////////////////////////////////////////////////
-void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo client_info) {
-
-    struct tm *lt;
-    time_t t;
-    char temp[BUFSIZE];
-    
-    strcpy(client_info.IP, inet_ntoa(client_addr.sin_addr));
-    client_info.No = request;
-    client_info.PID = getpid();
-    client_info.Port = ntohs(client_addr.sin_port);
-    
-    time(&t);
-    lt = localtime(&t);
-    strftime(temp, 1024, "%c", lt);
-    strcpy(client_info.TIME, temp);
-}
-
-void pushSturct() {
-
-    for(int i = 0; i < 10; i++) {
-        client_info[i].No = client_info[i+1].No;
-        client_info[i].Port = client_info[i+1].Port;
-        client_info[i].PID = client_info[i+1].PID;
-        strcpy(client_info[i].IP, client_info[i+1].IP);
-        strcpy(client_info[i].TIME, client_info[i+1].TIME);
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////////////
 // sendResponse                                                                      //
 // --------------------------------------------------------------------------------- //
 // Input: char* url -> The URL address requested by the client                       //
@@ -310,7 +312,7 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     char file_extension[10]; // 파일 확장자를 저장할 배열
     char content_type[30];   // MIME TYPE을 저장할 배열
     char *response_message = NULL; //서버의 응답 메세지
-    char sendArray[SEND_ARRAY_LEN] = {0, };
+    char *sendArray = (char *) malloc(SEND_ARRAY_LEN * sizeof(char));
 
     if(isNotStart == 0) //root path로 접근할 때(처음 접속)
         isNotFound = writeHTMLFile(url, sendArray); //존재하는 디렉토리인지 확인
@@ -347,26 +349,36 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
             strcpy(content_type, "text/plain"); //content-type을 text/plain으로 설정
     }
 
-    if (strcmp(content_type, "text/html") == 0) //디렉토리 주소를 입력받은 경우
-        file = fopen("dir_file_list.html", "r"); //html 파일(ls로 결과가 table로 출력) open
-    else if(strcmp(content_type, "text/plain") == 0)
-        file = fopen(url, "r");
-    else
-        file = fopen(url, "rb"); //이미지를 읽어오는 경우
+    if (strcmp(content_type, "text/html") == 0) { //디렉토리 주소를 입력받은 경우
+        count = strlen(sendArray) + 1;
+    }
+    else {
+        if(strcmp(content_type, "text/plain") == 0)
+            file = fopen(url, "r");
+        else
+            file = fopen(url, "rb"); //이미지를 읽어오는 경우
 
-    fseek(file, 0, SEEK_END); //파일의 끝부분으로 이동
-    count = ftell(file); //파일의 크기를 count에 저장
-    fseek(file, 0, SEEK_SET); //파일의 가장 앞으로 이동
-    rewind(file);
+        fseek(file, 0, SEEK_END); //파일의 끝부분으로 이동
+        count = ftell(file); //파일의 크기를 count에 저장
+        fseek(file, 0, SEEK_SET); //파일의 가장 앞으로 이동
+        rewind(file);
+    }
 
     response_message = (char *)malloc((sizeof(char)) * (count+1)); //count+1의 크기만큼 response_message 크기 지정
+    
+    if (strcmp(content_type, "text/html") == 0)
+        strcpy(response_message, sendArray);
 
-    if(strcmp(content_type, "image/*") == 0) //이미지 파일인 경우
-        fread(response_message, 1, count+1, file); //이미지 바이너리 파일 read 내용을 응답 메세지에 저장
-    else //일반 파일 및 디렉토리(html 문서)인 경우
-        fread(response_message, sizeof(char), count+1, file); //파일 read 내용을 응답 메세지에 저장
+    else {
 
-    fclose(file); //file close
+        if (strcmp(content_type, "image/*") == 0) //이미지 파일인 경우
+            fread(response_message, 1, count+1, file); //이미지 바이너리 파일 read 내용을 응답 메세지에 저장
+    
+        else //일반 파일인 경우
+            fread(response_message, sizeof(char), count+1, file); //파일 read 내용을 응답 메세지에 저장
+
+        fclose(file); //file close
+    }
 
     sprintf(response_header, "HTTP/1.0 200 OK\r\nServer: 2023 web server\r\nContent-length: %d\r\nContent-Type: %s\r\n\r\n", count+1, content_type); //서버 응답 메세지 헤더 설정
     write(client_fd, response_header, strlen(response_header)); //서버 응답 메세지 헤더 출력
@@ -387,18 +399,16 @@ int writeHTMLFile(char* url, char* sendArray) {
     char Apath[MAX_LENGTH] = {'\0', }; //working directory의 절대 경로
     char title[MAX_LENGTH] = "dir_file_list.html"; // html 문서
     
-    FILE *file = fopen("dir_file_list.html", "w"); //html 파일 생성 및 오픈
+    FILE *file = fopen("test.html", "w"); //html 파일 생성 및 오픈
 
-    fprintf(file, "<!DOCTYPE html>\n<html>\n<head>\n"); //title 생성
-    sprintf(sendArray, "<!DOCTYPE html>\n<html>\n<head>\n");
-    getAbsolutePath(title, Apath); //html 문서의 절대 경로 받아오기
-    fprintf(file, "<title>%s</title>\n</head>\n<body>\n", Apath); //절대경로로 title 설정
+    sprintf(sendArray, "<!DOCTYPE html>\n<html>\n<head>\n"); 
+    sprintf(sendArray, "%s<title>%s</title>\n</head>\n<body>\n", sendArray, Apath); //절대경로로 title 설정
 
     if(url[1] == '\0') { //root path인 경우
 
-        fprintf(file, "<h1>Welcome to System Programming Http</h1>\n<br>\n"); //header 작성
+        sprintf(sendArray, "%s<h1>Welcome to System Programming Http</h1>\n<br>\n", sendArray); //header 작성
         char currentPath[10] = "."; //현재 경로
-        listDirFiles(0, 1, 0, 0, 0, currentPath, file); //현재 디렉토리 하위 파일 출력
+        listDirFiles(0, 1, 0, 0, 0, currentPath, file, sendArray); //현재 디렉토리 하위 파일 출력
     }
 
     else { //root path가 아닌 경우
@@ -407,14 +417,14 @@ int writeHTMLFile(char* url, char* sendArray) {
 
         printf("%s\n", dirPath);
 
-        fprintf(file, "<h1>System Programming Http</h1>\n<br>\n"); //header 작성
+        sprintf(sendArray, "%s<h1>System Programming Http</h1>\n<br>\n", sendArray); //header 작성
         
         getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
         
         if(opendir(dirPath) == NULL) //url이 디렉토리가 아니라면 
             return 1; //함수 종료
 
-        listDirFiles(1, 1, 0, 0, 0, url, file); //url이 디렉토리라면 listDirFiles() 실행
+        listDirFiles(1, 1, 0, 0, 0, url, file, sendArray); //url이 디렉토리라면 listDirFiles() 실행
     }
 
     fclose(file); //file close
@@ -431,7 +441,7 @@ int writeHTMLFile(char* url, char* sendArray) {
 // purpose: Prints sub-files in the directory specified by the filename argument     //
 //          based on the options                                                     //
 ///////////////////////////////////////////////////////////////////////////////////////
-void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file) {
+void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file, char* sendArray) {
 
     DIR *dirp; //dir 포인터
     struct dirent *dir; //dirent 구조체
@@ -469,38 +479,31 @@ void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_r
         
         fileList[i] = (char*)malloc(sizeof(char) * 300); //동적 할당
         dir = readdir(dirp); //디렉토리 내 파일 읽기
-
-        if(strcmp(dir->d_name, "dir_file_list.html") != 0) //html 실행 파일이 아니라면
-            strcpy(fileList[i], dir->d_name); //fileList에 파일명 저장
-        else { //html 실행 파일이라면
-            i--; //인덱스 감소
-            realfileNum--; //실제 파일 수 감소
-            fileNum--; //파일 개수 감소
-        }
+        strcpy(fileList[i], dir->d_name); //fileList에 파일명 저장
     }
 
     sortByNameInAscii(fileList, fileNum, 0, r_reverse); //아스키 코드순으로 정렬
-    fprintf(file, "<b>Directory path: %s</b><br>\n", dirPath); //파일 경로 출력
+    sprintf(sendArray, "%s<b>Directory path: %s</b><br>\n", sendArray, dirPath); //파일 경로 출력
     
     if(l_format == 1) //옵션 -l이 포함된 경우
-        fprintf(file, "<b>total : %d</b>\n", (int)(total/2));
+        sprintf(sendArray, "%s<b>total : %d</b>\n", sendArray, (int)(total/2));
 
     if(realfileNum == 0) { //만약 html 실행 파일과 히든 파일을 제외한 파일이 없다면
-        fprintf(file, "<br><br>\n");
+        sprintf(sendArray, "%s<br><br>\n", sendArray);
         return;
     }
 
-    fprintf(file, "<table border=\"1\">\n<tr>\n<th>Name</th>\n"); // 테이블 생성
+    sprintf(sendArray, "%s<table border=\"1\">\n<tr>\n<th>Name</th>\n", sendArray); // 테이블 생성
     if (l_format == 1) {
-        fprintf(file, "<th>Permissions</th>\n");        // 권한 열 생성
-        fprintf(file, "<th>Link</th>\n");               // 링크 열 생성
-        fprintf(file, "<th>Owner</th>\n");              // 소유자 열 생성
-        fprintf(file, "<th>Group</th>\n");              // 소유 그룹 열 생성
-        fprintf(file, "<th>Size</th>\n");               // 사이즈 열 생성
-        fprintf(file, "<th>Last Modified</th>\n</tr>"); // 마지막 수정날짜 열 생성
+        sprintf(sendArray, "%s<th>Permissions</th>\n", sendArray);        // 권한 열 생성
+        sprintf(sendArray, "%s<th>Link</th>\n", sendArray);               // 링크 열 생성
+        sprintf(sendArray, "%s<th>Owner</th>\n", sendArray);              // 소유자 열 생성
+        sprintf(sendArray, "%s<th>Group</th>\n", sendArray);              // 소유 그룹 열 생성
+        sprintf(sendArray, "%s<th>Size</th>\n", sendArray);               // 사이즈 열 생성
+        sprintf(sendArray, "%s<th>Last Modified</th>\n</tr>", sendArray); // 마지막 수정날짜 열 생성
     }
     else
-        fprintf(file, "</tr>"); //header raw 닫기
+        sprintf(sendArray, "%s</tr>", sendArray); //header raw 닫기
 
     for (int i = 0; i < fileNum; i++) { // 파일 개수만큼 반복
 
@@ -513,16 +516,16 @@ void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_r
         char color[20] = {'\0',}; // 파일의 색상 저장할 배열
         findColor(accessPath, color); // 색 찾기
 
-        fprintf(file, "<tr style=\"%s\">\n", color);
-        fprintf(file, "<td><a href=%s>%s</a></td>", accessPath, fileList[i]); // 파일 이름 및 링크 출력
+        sprintf(sendArray, "%s<tr style=\"%s\">\n", sendArray, color);
+        sprintf(sendArray, "%s<td><a href=%s>%s</a></td>", sendArray, accessPath, fileList[i]); // 파일 이름 및 링크 출력
 
         if (l_format == 1)                                      // 옵션 -l이 포함된 경우
-            printAttributes(fileStat, file, h_readable, color); // 속성 정보 출력
+            printAttributes(fileStat, file, h_readable, color, sendArray); // 속성 정보 출력
 
         else
-            fprintf(file, "</tr>"); //raw 닫기
+            sprintf(sendArray, "%s</tr>", sendArray); //raw 닫기
     }
-    fprintf(file, "</table>\n<br>\n"); //table 닫기
+    sprintf(sendArray, "%s</table>\n<br>\n", sendArray); //table 닫기
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -582,14 +585,13 @@ void joinPathAndFileName(char* path, char* Apath, char* fileName) {
 // purpose: Prints the attributes of the file using the information from the given   //
 //          name of struct stat object                                               //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *color) {
+void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *color, char* sendArray) {
     
     char timeBuf[80]; //시간 정보 받아올 변수
-
-    printType(fileStat, file); // 파일 유형
-    printPermissions(fileStat.st_mode, file); // 허가권
-    fprintf(file, "<td>%ld</td>", fileStat.st_nlink); // 링크 수
-    fprintf(file, "<td>%s</td><td>%s</td>", getpwuid(fileStat.st_uid)->pw_name, getgrgid(fileStat.st_gid)->gr_name); // 파일 소유자 및 파일 소유 그룹
+    printType(fileStat, file, sendArray); // 파일 유형
+    printPermissions(fileStat.st_mode, file, sendArray); // 허가권
+    sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_nlink); // 링크 수
+    sprintf(sendArray, "%s<td>%s</td><td>%s</td>", sendArray, getpwuid(fileStat.st_uid)->pw_name, getgrgid(fileStat.st_gid)->gr_name); // 파일 소유자 및 파일 소유 그룹
 
     if(h_readable == 1) { //만약 h 속성이 존재한다면
         
@@ -606,17 +608,17 @@ void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *col
         }
 
         if(unit == 1) //단위를 붙여야 한다면
-            fprintf(file, "<td>%.1f%c</td>", size, sizeUnit[unitIndex]); //소수점 아래 한 자리까지 출력
+            sprintf(sendArray, "%s<td>%.1f%c</td>", sendArray, size, sizeUnit[unitIndex]); //소수점 아래 한 자리까지 출력
         else //안붙여도 될 정도로 작다면
-            fprintf(file, "<td>%.0f</td>", size); //소수점 버리고 출력
+            sprintf(sendArray, "%s<td>%.0f</td>", sendArray, size); //소수점 버리고 출력
     }
     else
-        fprintf(file, "<td>%ld</td>", fileStat.st_size); // 파일 사이즈
+        sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_size); // 파일 사이즈
 
     strftime(timeBuf, sizeof(timeBuf), "%b %d %H:%M", localtime(&fileStat.st_mtime)); // 수정된 날짜 및 시간 불러오기
-    fprintf(file, "<td>%s</td>", timeBuf); // 수정된 날짜 및 시간 출력
+    sprintf(sendArray, "%s<td>%s</td>", sendArray, timeBuf); // 수정된 날짜 및 시간 출력
 
-    fprintf(file, "</tr>\n");
+    sprintf(sendArray, "%s</tr>\n", sendArray);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -702,18 +704,18 @@ int compareStringUpper(char* fileName1, char* fileName2) {
 // output:                                                                           //
 // purpose: Printing file permissions for user, group, and others.                   //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printPermissions(mode_t mode, FILE *file) {
-    fprintf(file, "%c", (mode & S_IRUSR) ? 'r' : '-'); //user-read
-    fprintf(file, "%c", (mode & S_IWUSR) ? 'w' : '-'); //user-write
-    fprintf(file, "%c", (mode & S_IXUSR) ? 'x' : '-'); //user-execute
-    fprintf(file, "%c", (mode & S_IRGRP) ? 'r' : '-'); //group-read
-    fprintf(file, "%c", (mode & S_IWGRP) ? 'w' : '-'); //group-write
-    fprintf(file, "%c", (mode & S_IXGRP) ? 'x' : '-'); //group-execute
-    fprintf(file, "%c", (mode & S_IROTH) ? 'r' : '-'); //other-read
-    fprintf(file, "%c", (mode & S_IWOTH) ? 'w' : '-'); //other-write
-    fprintf(file, "%c", (mode & S_IXOTH) ? 'x' : '-'); //other-execute
+void printPermissions(mode_t mode, FILE *file, char* sendArray) {
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IRUSR) ? 'r' : '-'); //user-read
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IWUSR) ? 'w' : '-'); //user-write
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IXUSR) ? 'x' : '-'); //user-execute
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IRGRP) ? 'r' : '-'); //group-read
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IWGRP) ? 'w' : '-'); //group-write
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IXGRP) ? 'x' : '-'); //group-execute
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IROTH) ? 'r' : '-'); //other-read
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IWOTH) ? 'w' : '-'); //other-write
+    sprintf(sendArray, "%s%c", sendArray, (mode & S_IXOTH) ? 'x' : '-'); //other-execute
 
-    fprintf(file, "</td>");
+    sprintf(sendArray, "%s</td>", sendArray);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -724,34 +726,34 @@ void printPermissions(mode_t mode, FILE *file) {
 // output:                                                                           //
 // purpose: Printing file type(regular file, directory, symbolic link, etc.)         //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printType(struct stat fileStat, FILE *file) {
+void printType(struct stat fileStat, FILE *file, char* sendArray) {
 
-    fprintf(file, "<td>");
+    sprintf(sendArray, "%s<td>", sendArray);
 
     switch (fileStat.st_mode & S_IFMT) {
     case S_IFREG: //regular file
-        fprintf(file, "-");
+        sprintf(sendArray, "%s-", sendArray);
         break;
     case S_IFDIR: //directory
-        fprintf(file, "d");
+        sprintf(sendArray, "%sd", sendArray);
         break;
     case S_IFLNK: //symbolic link
-        fprintf(file, "l");
+        sprintf(sendArray, "%sl", sendArray);
         break;
     case S_IFSOCK: //socket
-        fprintf(file, "s");
+        sprintf(sendArray, "%ss", sendArray);
         break;
     case S_IFIFO: //FIFO(named pipe)
-        fprintf(file, "p");
+        sprintf(sendArray, "%sp", sendArray);
         break;
     case S_IFCHR: //character device
-        fprintf(file, "c");
+        sprintf(sendArray, "%sc", sendArray);
         break;
     case S_IFBLK: //block device
-        fprintf(file, "b");
+        sprintf(sendArray, "%sb", sendArray);
         break;
     default:
-        fprintf(file, "?"); //unknown
+        sprintf(sendArray, "%s?", sendArray); //unknown
         break;
     }
 }
