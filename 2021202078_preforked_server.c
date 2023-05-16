@@ -54,17 +54,17 @@ void printServerHistory(int sig);
 void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info);
 void shiftSturct();
 void sendResponse(char* url, char* response_header, int isNotStart, int client_fd);
-void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file, char* sendArray);
+void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray);
 void getAbsolutePath(char *inputPath, char *absolutePath);
 void removeDuplicateChars(char* str);
 void joinPathAndFileName(char* path, char* Apath, char* fileName);
-void sortByNameInAscii(char **fileList, int fileNum, int start, int r_reverse);
-void printPermissions(mode_t mode, FILE *file, char* sendArray);
-void printType(struct stat fileStat, FILE *file, char* sendArray);
+void sortByNameInAscii(char **fileList, int fileNum, int start);
+void printPermissions(mode_t mode, char* sendArray);
+void printType(struct stat fileStat, char* sendArray);
 void findColor(char* fileName, char* color);
-void printAttributes(struct stat fileStat, FILE *file, int h_readable, char *color, char* sendArray);
+void printAttributes(struct stat fileStat, char *color, char* sendArray);
 int compareStringUpper(char* fileName1, char* fileName2);
-int writeHTMLFile(char* url, char* sendArray);
+int writeLsPage(char* url, char* sendArray);
 int isAccesible(char* inputIP, char* response_header, int client_fd);
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -315,7 +315,7 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     char *sendArray = (char *) malloc(SEND_ARRAY_LEN * sizeof(char));
 
     if(isNotStart == 0) //root path로 접근할 때(처음 접속)
-        isNotFound = writeHTMLFile(url, sendArray); //존재하는 디렉토리인지 확인
+        isNotFound = writeLsPage(url, sendArray); //존재하는 디렉토리인지 확인
     
     if (isNotFound == 1) { //존재하지 않는 디렉토리라면
         
@@ -343,7 +343,7 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
 
         if((opendir(dirPath) != NULL) || (isNotStart == 0)) { //디렉토리인 경우 또는 root path인 경우
             strcpy(content_type, "text/html"); //content-type을 text/html로 설정
-            writeHTMLFile(url, sendArray); //html 파일에 ls 결과 입력
+            writeLsPage(url, sendArray); //html 파일에 ls 결과 입력
         }
         else
             strcpy(content_type, "text/plain"); //content-type을 text/plain으로 설정
@@ -386,30 +386,29 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
-// writeHTMLFile                                                                     //
+// writeLsPage                                                                       //
 // --------------------------------------------------------------------------------- //
 // Input: char* url -> The URL address requested by the client                       //
 // output:                                                                           //
 // purpose: If the requested file is a directory, input the ls results for the files //
 //          in the directory into an HTML document.                                  //
 ///////////////////////////////////////////////////////////////////////////////////////
-int writeHTMLFile(char* url, char* sendArray) {
+int writeLsPage(char* url, char* sendArray) {
     
-    struct dirent *dir; //dirent 구조체
-    char Apath[MAX_LENGTH] = {'\0', }; //working directory의 절대 경로
-    char title[MAX_LENGTH] = "dir_file_list.html"; // html 문서
+    char curPath[MAX_LENGTH] = {'\0', }; //working directory의 절대 경로
     char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
-    
-    FILE *file = fopen("test.html", "w"); //html 파일 생성 및 오픈
 
+    getcwd(curPath, MAX_LENGTH);
+    curPath[strlen(curPath)] = '/';
+    curPath[strlen(curPath)] = '\0';
     sprintf(sendArray, "<!DOCTYPE html>\n<html>\n<head>\n"); 
-    sprintf(sendArray, "%s<title>%s</title>\n</head>\n<body>\n", sendArray, Apath); //절대경로로 title 설정
+    sprintf(sendArray, "%s<title>%s</title>\n</head>\n<body>\n", sendArray, curPath); //절대경로로 title 설정
 
-    if(url[1] == '\0') { //root path인 경우
+    if((url[1] == '\0') || (strcmp(url, curPath) == 0)) { //root path인 경우
 
         sprintf(sendArray, "%s<h1>Welcome to System Programming Http</h1>\n<br>\n", sendArray); //header 작성
         char currentPath[10] = "."; //현재 경로
-        listDirFiles(0, 1, 0, 0, 0, currentPath, file, sendArray); //현재 디렉토리 하위 파일 출력
+        listDirFiles(0, 1, currentPath, sendArray); //현재 디렉토리 하위 파일 출력
     }
 
     else { //root path가 아닌 경우
@@ -420,10 +419,8 @@ int writeHTMLFile(char* url, char* sendArray) {
         if(opendir(dirPath) == NULL) //url이 디렉토리가 아니라면 
             return 1; //함수 종료
 
-        listDirFiles(1, 1, 0, 0, 0, url, file, sendArray); //url이 디렉토리라면 listDirFiles() 실행
+        listDirFiles(1, 1, url, sendArray); //url이 디렉토리라면 listDirFiles() 실행
     }
-
-    fclose(file); //file close
     return 0; //함수 종료
 }
 
@@ -437,7 +434,7 @@ int writeHTMLFile(char* url, char* sendArray) {
 // purpose: Prints sub-files in the directory specified by the filename argument     //
 //          based on the options                                                     //
 ///////////////////////////////////////////////////////////////////////////////////////
-void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file, char* sendArray) {
+void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
 
     DIR *dirp; //dir 포인터
     struct dirent *dir; //dirent 구조체
@@ -478,7 +475,7 @@ void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_r
         strcpy(fileList[i], dir->d_name); //fileList에 파일명 저장
     }
 
-    sortByNameInAscii(fileList, fileNum, 0, r_reverse); //아스키 코드순으로 정렬
+    sortByNameInAscii(fileList, fileNum, 0); //아스키 코드순으로 정렬
     sprintf(sendArray, "%s<b>Directory path: %s</b><br>\n", sendArray, dirPath); //파일 경로 출력
     
     if(l_format == 1) //옵션 -l이 포함된 경우
@@ -516,7 +513,7 @@ void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_r
         sprintf(sendArray, "%s<td><a href=%s>%s</a></td>", sendArray, accessPath, fileList[i]); // 파일 이름 및 링크 출력
 
         if (l_format == 1)                                      // 옵션 -l이 포함된 경우
-            printAttributes(fileStat, file, h_readable, color, sendArray); // 속성 정보 출력
+            printAttributes(fileStat, color, sendArray); // 속성 정보 출력
 
         else
             sprintf(sendArray, "%s</tr>", sendArray); //raw 닫기
@@ -587,35 +584,15 @@ void joinPathAndFileName(char* path, char* Apath, char* fileName) {
 // purpose: Prints the attributes of the file using the information from the given   //
 //          name of struct stat object                                               //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *color, char* sendArray) {
+void printAttributes(struct stat fileStat, char *color, char* sendArray) {
     
     char timeBuf[80]; //시간 정보 받아올 변수
-    printType(fileStat, file, sendArray); //파일 유형
-    printPermissions(fileStat.st_mode, file, sendArray); //허가권
+    printType(fileStat, sendArray); //파일 유형
+    printPermissions(fileStat.st_mode, sendArray); //허가권
     sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_nlink); //링크 수
     sprintf(sendArray, "%s<td>%s</td><td>%s</td>", sendArray, getpwuid(fileStat.st_uid)->pw_name, getgrgid(fileStat.st_gid)->gr_name); //파일 소유자 및 파일 소유 그룹
 
-    if(h_readable == 1) { //만약 h 속성이 존재한다면
-        
-        double size = (double)fileStat.st_size; //파일의 사이즈를 받아오기
-        int remainder = 0; //1024로 나눈 나머지를 계속 저장할 변수
-        char sizeUnit[3] = {'K', 'M', 'G'}; //K, M, G 단위
-        int unit = 0, unitIndex = -1; //유닛 인덱스로 단위 붙이기
-
-        while (size >= 1024) { //1024보다 클 경우
-            size /= 1024; //1024로 나눈 몫
-            remainder %= 1024; //1024로 나눈 나머지
-            unit = 1; //단위를 붙여야 함
-            unitIndex++; //유닛 인덱스 증가
-        }
-
-        if(unit == 1) //단위를 붙여야 한다면
-            sprintf(sendArray, "%s<td>%.1f%c</td>", sendArray, size, sizeUnit[unitIndex]); //소수점 아래 한 자리까지 출력
-        else //안붙여도 될 정도로 작다면
-            sprintf(sendArray, "%s<td>%.0f</td>", sendArray, size); //소수점 버리고 출력
-    }
-    else
-        sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_size); // 파일 사이즈
+    sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_size); // 파일 사이즈
 
     strftime(timeBuf, sizeof(timeBuf), "%b %d %H:%M", localtime(&fileStat.st_mtime)); // 수정된 날짜 및 시간 불러오기
     sprintf(sendArray, "%s<td>%s</td>", sendArray, timeBuf); // 수정된 날짜 및 시간 출력
@@ -631,7 +608,7 @@ void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *col
 // output:                                                                           //
 // purpose: Sort the filenames in alphabetical order (ignoring case) without the dot //
 ///////////////////////////////////////////////////////////////////////////////////////
-void sortByNameInAscii(char **fileList, int fileNum, int start, int r_reverse)
+void sortByNameInAscii(char **fileList, int fileNum, int start)
 {
     int* isHidden = (int*)calloc(fileNum, sizeof(int)); //hidden file인지 판별 후 저장
     
@@ -645,7 +622,7 @@ void sortByNameInAscii(char **fileList, int fileNum, int start, int r_reverse)
 
     for (int i = start; i < (fileNum - 1); i++) { // 대소문자 구분 없는 알파벳 순으로 정렬
         for (int j = i + 1; j < fileNum; j++) { //bubble sort
-            if (((compareStringUpper(fileList[i], fileList[j]) == 1) && (r_reverse == 0)) || ((compareStringUpper(fileList[i], fileList[j]) == 0) && (r_reverse == 1))) {
+            if (compareStringUpper(fileList[i], fileList[j]) == 1) {
             //만약 첫 문자열이 둘째 문자열보다 작다면
                 char *temp = fileList[i]; // 문자열 위치 바꾸기
                 fileList[i] = fileList[j];
@@ -706,7 +683,7 @@ int compareStringUpper(char* fileName1, char* fileName2) {
 // output:                                                                           //
 // purpose: Printing file permissions for user, group, and others.                   //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printPermissions(mode_t mode, FILE *file, char* sendArray) {
+void printPermissions(mode_t mode, char* sendArray) {
     sprintf(sendArray, "%s%c", sendArray, (mode & S_IRUSR) ? 'r' : '-'); //user-read
     sprintf(sendArray, "%s%c", sendArray, (mode & S_IWUSR) ? 'w' : '-'); //user-write
     sprintf(sendArray, "%s%c", sendArray, (mode & S_IXUSR) ? 'x' : '-'); //user-execute
@@ -728,7 +705,7 @@ void printPermissions(mode_t mode, FILE *file, char* sendArray) {
 // output:                                                                           //
 // purpose: Printing file type(regular file, directory, symbolic link, etc.)         //
 ///////////////////////////////////////////////////////////////////////////////////////
-void printType(struct stat fileStat, FILE *file, char* sendArray) {
+void printType(struct stat fileStat, char* sendArray) {
 
     sprintf(sendArray, "%s<td>", sendArray);
 
