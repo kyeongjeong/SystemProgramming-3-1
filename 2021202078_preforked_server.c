@@ -52,15 +52,15 @@ struct ClientInfo client_info[10];
 static pid_t *pids;
 
 pid_t child_make(int i, int socketfd, int addrlen);
+void parentSingalHandler(int sig);
+void childSingalHandler(int sig);
 void child_main(int i, int socketfd, int addrlen);
-void printServerHistory(int sig);
-void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info);
+void saveConnectHistory(struct sockaddr_in client_addr);
 void shiftSturct();
 void sendResponse(char* url, char* response_header, int isNotStart, int client_fd);
 void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray);
 void getAbsolutePath(char *inputPath, char *absolutePath);
 void removeDuplicateChars(char* str);
-void joinPathAndFileName(char* path, char* Apath, char* fileName);
 void sortByNameInAscii(char **fileList, int fileNum, int start);
 void printPermissions(mode_t mode, char* sendArray);
 void printType(struct stat fileStat, char* sendArray);
@@ -84,11 +84,20 @@ int isExist(int client_fd, char* response_header, char* url);
 int main() {
     
     struct sockaddr_in server_addr, client_addr; //서버 및 클라이언트의 주소
+    struct tm *lt;
+    struct sigaction sigAct;
+    sigset_t mask;
+    time_t t;
+    char temp[BUFSIZE];
     int socket_fd, client_fd; //소켓 및 클라이언트의 file descriptor
-    unsigned int len; //클라이언트 주소의 길이
     int opt = 1; //소켓의 옵션 사용 설정
     int isNotStart = 0; //클라이언트의 초기 요청인지 구분
     request = 0;
+
+    sigAct.sa_handler = childSingalHandler; //SIGUSR1 Signaling Function Registration
+    sigemptyset(&sigAct.sa_mask);
+    sigAct.sa_flags = 0;
+    sigaction(SIGUSR1, &sigAct, NULL);
 
     if((socket_fd = socket(PF_INET, SOCK_STREAM, 0)) < 0) { //소켓 생성
         printf("Server : Can't open stream socket\n"); //소켓 생성 실패 시
@@ -104,13 +113,20 @@ int main() {
         printf("Server : Can't bind local address\n"); //소켓 할당 실패 시 
         return 0; //프로그램 종료
     }
+    else {
+        time(&t);
+        lt = localtime(&t);
+        strftime(temp, 1024, "%c", lt);
+        printf("[%s] Server is started\n", temp);
+    }
 
     if(listen(socket_fd, 5) == -1) {
         printf("Server : can't listen\n");
         return 0;
     }
 
-    signal(SIGALRM, printServerHistory);
+    signal(SIGALRM, parentSingalHandler);
+    signal(SIGINT, parentSingalHandler);
     alarm(10);
 
     pids = (pid_t *)malloc(5 * sizeof(pid_t));
@@ -121,6 +137,37 @@ int main() {
 
     for(;;)
         pause();
+
+    close(socket_fd);
+    return 0; //프로그램 종료
+}
+
+pid_t child_make(int i, int socket_fd, int addrlen) {
+
+    pid_t pid;
+
+    if((pid = fork()) > 0)
+        return pid;
+    
+    child_main(i, socket_fd, addrlen);
+}
+
+void child_main(int i, int socket_fd, int addrlen)
+{
+    struct sockaddr_in client_addr;
+    struct tm *lt;
+    time_t t;
+    char temp[BUFSIZE];
+    unsigned int len;
+    int client_fd;
+    int isNotStart = 0;
+
+    time(&t);
+    lt = localtime(&t);
+    strftime(temp, 1024, "%c", lt);
+    printf("[%s] %ld process is forked.\n", temp, (long)getpid());
+    signal(SIGUSR1, childSingalHandler);
+    signal(SIGTERM, childSingalHandler);
 
     while(1) {
         
@@ -138,7 +185,7 @@ int main() {
 
         if(client_fd < 0) {
             printf("Server : accept failed\n"); //연결 요청 실패 시
-            return 0; //프로그램 종료
+            return; //프로그램 종료
         }
 
         inet_clinet_address.s_addr = client_addr.sin_addr.s_addr; // 클라이언트 주소 정보 저장
@@ -168,79 +215,74 @@ int main() {
             continue;
         } 
 
-        else if (pid == 0) { // 자식 프로세스
-            
-            printf("\n========= New Client ============\nIP : %s\n Port : %d\n=================================\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력
-            sendResponse(url, response_header, isNotStart, client_fd); //아닌 경우, response 메세지 입력 및 출력
+        time(&t);
+        lt = localtime(&t);
+        strftime(temp, 1024, "%c", lt);
+        printf("========= New Client ============\n[%s]\nIP : %s\nPort : %d\n=================================\n", temp, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력
+        sendResponse(url, response_header, isNotStart, client_fd); //아닌 경우, response 메세지 입력 및 출력
 
-            close(client_fd);
-            printf("====== Disconnected Client ======\nIP : %s\n Port : %d\n=================================\n\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력  
-            
-            exit(0); // 자식 프로세스 종료
-        }
+        ++request; // 누적 접속 기록 개수 증가
+        saveConnectHistory(client_addr);
 
-        else { //부모 프로세스인 경우
-            
-            ++request; //누적 접속 기록 개수 증가
-            if(request < 11) 
-                saveConnectHistory(client_addr, &client_info[request -1]);            
-            else {
-                shiftSturct();
-                saveConnectHistory(client_addr, &client_info[9]);
-            }
-            
-            int *status;
-            close(client_fd);
-            wait(status); //wait
-        }
-
-        close(client_fd);
         isNotStart = 1; //클라이언트의 초기 요청이 아님을 저장
-    }
-    close(socket_fd); //socket descriptor close
-    return 0; //프로그램 종료
-}
-
-pid_t child_make(int i, int socketfd, int addrlen) {
-
-    pid_t pid;
-
-    if((pid = fork()) > 0)
-        return pid;
-    
-    child_main(i, socketfd, addrlen);
-}
-
-void child_main(int i, int socketfd, int addrlen)
-{
-    int client_fd, len_out;
-    char buf[BUFSIZE];
-    socklen_t clilen;
-    struct sockaddr *client_addr;
-
-    client_addr = (struct sockaddr *)malloc(addrlen);
-    printf("child %ld starting\n", (long)getpid());
-
-    while(1){
-
-        clilen = addrlen;
-
-        if((client_fd = accept(socketfd, client_addr, &clilen)) < 0) {
-            printf("Server: accept failed: \n");
-            return;
-        }
-
-        while((len_out = read(client_fd, buf, sizeof(buf)))>0) {
-            printf("\n%s", buf);
-            printf("child %ld processing request\n", (long)getpid());
-            write(client_fd, buf, len_out);
-            memset(buf, 0, sizeof(buf));
-        }
         close(client_fd);
-        printf("child %ld: client closed conn\n", (long)getpid());
+        printf("====== Disconnected Client ======\n[%s]\nIP : %s\nPort : %d\n=================================\n", temp, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력
+    }
+    return; //프로그램 종료
+}
+
+void parentSingalHandler(int sig) {
+
+    if(sig == SIGALRM) {
+
+        printf("\n========= Connection History ===================================\n");
+        printf("No.\tIP\t\tPID\tPORT\tTIME\n");
+        for(int i = 0; i < 5; i++) 
+            kill(pids[i], SIGUSR1);
+        alarm(10);
     }
 
-} 
+    if(sig == SIGINT) {
+
+        struct tm *lt;
+        time_t t;
+        char temp[BUFSIZE];
+        int *status;
+
+        for (int i = 0; i < 5; i++)
+            kill(pids[i], SIGTERM);
+        for (int i = 0; i < 5; i++)
+            waitpid(pids[i], status, WNOHANG);
+        for (int i = 0; i < 5; i++) {
+            time(&t);
+            lt = localtime(&t);
+            strftime(temp, 1024, "%c", lt);
+            printf("[%s] %d process is terminated\n", temp, pids[i]);
+        }
+
+        time(&t);
+        lt = localtime(&t);
+        strftime(temp, 1024, "%c", lt);
+        printf("[%s] Server is terminated\n", temp);
+        exit(0);
+    }
+}
+
+void childSingalHandler(int sig) {
+
+    if(sig == SIGUSR1) {
+
+        int n = request;
+        if (request > 10)
+        n = 10;
+
+        for (int i = n - 1; i >= 0; i--)
+            printf("%d\t%s\t%d\t%d\t%s\n", client_info[i].No, client_info[i].IP, client_info[i].PID, client_info[i].Port, client_info[i].TIME);
+    }
+
+    if(sig == SIGTERM)
+        exit(0);
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // saveConnectHistory                                                                //
@@ -252,60 +294,35 @@ void child_main(int i, int socketfd, int addrlen)
 //          process IP executed, and the time when the server and client were        //
 //          connected.                                                               //
 ///////////////////////////////////////////////////////////////////////////////////////
-void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info) {
+void saveConnectHistory(struct sockaddr_in client_addr) {
 
     struct tm *lt;
     time_t t;
     char temp[BUFSIZE];
+    int n;
+
+    if (request < 11)
+        n = request - 1;
+    else {
+        n = 9;
+        for(int i = 0; i < 10; i++) {
+            client_info[i].No = client_info[i + 1].No;
+            client_info[i].Port = client_info[i + 1].Port;
+            client_info[i].PID = client_info[i + 1].PID;
+            strcpy(client_info[i].IP, client_info[i + 1].IP);
+            strcpy(client_info[i].TIME, client_info[i + 1].TIME);
+        }
+    }
     
-    strcpy(client_info->IP, inet_ntoa(client_addr.sin_addr));
-    client_info->No = request;
-    client_info->PID = getpid();
-    client_info->Port = ntohs(client_addr.sin_port);
+    strcpy(client_info[n].IP, inet_ntoa(client_addr.sin_addr));
+    client_info[n].No = request;
+    client_info[n].PID = getpid();
+    client_info[n].Port = ntohs(client_addr.sin_port);
     
     time(&t);
     lt = localtime(&t);
     strftime(temp, 1024, "%c", lt);
     strcpy(client_info->TIME, temp);    
-}
-
-void shiftSturct() {
-
-    for(int i = 0; i < 10; i++) {
-        client_info[i].No = client_info[i+1].No;
-        client_info[i].Port = client_info[i+1].Port;
-        client_info[i].PID = client_info[i+1].PID;
-        strcpy(client_info[i].IP, client_info[i+1].IP);
-        strcpy(client_info[i].TIME, client_info[i+1].TIME);
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////////////
-// printServerHistory                                                                //
-// --------------------------------------------------------------------------------- //
-// Input:                                                                            //
-// output:                                                                           //
-// purpose: Store the 10 most recent connection records. The connection record       //
-//          should include the client connection number, IP address, port number,    //
-//          process IP executed, and the time when the server and client were        //
-//          connected.                                                               //
-///////////////////////////////////////////////////////////////////////////////////////
-void printServerHistory(int sig) {
-
-    printf("========= Connection History ===================================\n");    
-    printf("Number of request(s) : %d\n", request); //누적 접근 수 출력
-    if(request > 0) { //만약 1번 이상 클라이언트가 접근한 적이 있으면
-        printf("No.\tIP\t\tPID\tPORT\tTIME\n");
-        
-        int n = request;
-        if(request > 10)
-            n = 10;
-
-        for(int i = n-1; i >= 0; i--) 
-            printf("%d\t%s\t%d\t%d\t%s\n", client_info[i].No, client_info[i].IP, client_info[i].PID, client_info[i].Port, client_info[i].TIME);
-    }
-    printf("================================================================\n");
-    alarm(10);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -346,6 +363,28 @@ int isAccesible(char* inputIP, char* response_header, int client_fd) {
     return 0; //현재 접근 시도하는 IP가 접근 가능 권한이 없을 경우 0 반환
 }
 
+int isExist(int client_fd, char* response_header, char* url) {
+
+    struct stat st;
+    char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
+    getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
+    removeDuplicateChars(dirPath);
+    lstat(dirPath, &st);
+
+    if(((st.st_mode & S_IFMT)==S_IFDIR) && (opendir(dirPath) == NULL)) { //url이 디렉토리가 아니라면 
+
+        char error_message[MAX_LENGTH]; //서버의 에러 응답 메세지
+
+        sprintf(error_message, "<h1>Not Found</h1><br>The request URL %s was not found on this server<br>HTTP 404 - Not Page Found", url); //에러 메세지 설정
+        sprintf(response_header, "HTTP/1.0 404\r\nServer: 2023 web server\r\nContent-length: %ld\r\nContent-Type: text/html\r\n\r\n", strlen(error_message)+1); //헤더 메세지 설정
+        
+        write(client_fd, response_header, strlen(response_header) + 1); //응답 메세지 헤더 write
+        write(client_fd, error_message, strlen(error_message) + 1); //에러 응답 메세지 write
+        return 1;
+    }
+    return 0;
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////
 // sendResponse                                                                      //
 // --------------------------------------------------------------------------------- //
@@ -362,11 +401,15 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
 
     FILE *file; //url로 열 파일
     struct dirent *dir; //파일 정보를 담을 구조체
-    int count = 0, isNotFound = 0; //파일의 길이, 파일의 존재 여부
-    char file_extension[10]; // 파일 확장자를 저장할 배열
+    struct stat st;
+    int count = 0; //파일의 길이, 파일의 존재 여부
     char content_type[30];   // MIME TYPE을 저장할 배열
     char *response_message = NULL; //서버의 응답 메세지
     char *sendArray = (char *) malloc(SEND_ARRAY_LEN * sizeof(char));
+
+    char Apath[MAX_LENGTH];
+    getAbsolutePath(url, Apath);
+    lstat(Apath, &st);
 
     //이미지 파일인 경우
     if ((fnmatch("*.jpg", url, FNM_CASEFOLD) == 0) || (fnmatch("*.png", url, FNM_CASEFOLD) == 0) || (fnmatch("*.jpeg", url, FNM_CASEFOLD) == 0)) 
@@ -374,14 +417,7 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
 
     else { //디렉토리 또는 일반 파일인 경우
 
-        char *dot = strrchr(url, '.'); //확장자 찾기
-        if (dot && dot != url) //확장자가 존재하는 경우
-            strcpy(file_extension, dot + 1); //확장자명을 file_extension에 저장
-
-        char dirPath[MAX_LENGTH] = {'\0', }; //파일 또는 디렉토리의 절대 경로
-        getAbsolutePath(url, dirPath); //파일 또는 디렉토리의 절대경로 받아오기
-
-        if((opendir(dirPath) != NULL) || (isNotStart == 0)) { //디렉토리인 경우 또는 root path인 경우
+        if((st.st_mode & S_IFMT)==S_IFDIR) { //디렉토리인 경우 또는 root path인 경우
             strcpy(content_type, "text/html"); //content-type을 text/html로 설정
             writeLsPage(url, sendArray); //html 파일에 ls 결과 입력
         }
@@ -394,9 +430,9 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     }
     else {
         if(strcmp(content_type, "text/plain") == 0)
-            file = fopen(url, "r");
+            file = fopen(Apath, "r");
         else
-            file = fopen(url, "rb"); //이미지를 읽어오는 경우
+            file = fopen(Apath, "rb"); //이미지를 읽어오는 경우
 
         fseek(file, 0, SEEK_END); //파일의 끝부분으로 이동
         count = ftell(file); //파일의 크기를 count에 저장
@@ -423,25 +459,6 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     sprintf(response_header, "HTTP/1.0 200 OK\r\nServer: 2023 web server\r\nContent-length: %d\r\nContent-Type: %s\r\n\r\n", count+1, content_type); //서버 응답 메세지 헤더 설정
     write(client_fd, response_header, strlen(response_header)); //서버 응답 메세지 헤더 출력
     write(client_fd, response_message, count+1); //서버 응답 메세지 출력
-}
-
-int isExist(int client_fd, char* response_header, char* url) {
-
-    char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
-    getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
-        
-    if(opendir(dirPath) == NULL) { //url이 디렉토리가 아니라면 
-
-        char error_message[MAX_LENGTH]; //서버의 에러 응답 메세지
-
-        sprintf(error_message, "<h1>Not Found</h1><br>The request URL %s was not found on this server<br>HTTP 404 - Not Page Found", url); //에러 메세지 설정
-        sprintf(response_header, "HTTP/1.0 404\r\nServer: 2023 web server\r\nContent-length: %ld\r\nContent-Type: text/html\r\n\r\n", strlen(error_message)+1); //헤더 메세지 설정
-        
-        write(client_fd, response_header, strlen(response_header) + 1); //응답 메세지 헤더 write
-        write(client_fd, error_message, strlen(error_message) + 1); //에러 응답 메세지 write
-        return 1;
-    }
-    return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -514,7 +531,9 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
 
     while((dir = readdir(dirp)) != NULL) { //디렉토리 하위 파일들을 읽어들임
 
-        joinPathAndFileName(accessFilename, dirPath, dir->d_name);
+        strcpy(accessFilename, dirPath); //입력받은 경로 불러오기
+        strcat(accessFilename, "/"); // /를 붙이고
+        strcat(accessFilename, dir->d_name); //읽어온 파일명 붙이기
         lstat(accessFilename, &st); //파일의 절대 경로로 lstat() 호출
 
         if(a_hidden == 1 || dir->d_name[0] != '.') {
@@ -556,7 +575,9 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
         if ((a_hidden == 0) && fileList[i][0] == '.') // 옵션 -a 여부에 따라 파일속성 출력
             continue;
 
-        joinPathAndFileName(accessPath, dirPath, fileList[i]); // 파일과 경로를 이어붙이기
+        strcpy(accessPath, dirPath); //입력받은 경로 불러오기
+        strcat(accessPath, "/"); // /를 붙이고
+        strcat(accessPath, fileList[i]); //읽어온 파일명 붙이기
         removeDuplicateChars(accessPath);
         lstat(accessPath, &fileStat);                           // 파일 속성정보 불러옴
 
@@ -615,23 +636,6 @@ void removeDuplicateChars(char* str) {
         }
     }
     str[j] = '\0'; //마지막 문자를 null로 하여 문자열 마무리
-}
-
-///////////////////////////////////////////////////////////////////////////////////////
-// joinPathAndFileName                                                               //
-// --------------------------------------------------------------------------------- //
-// Input: char* inputPath -> new array that concatenated                             //
-//        char* Apath -> absolute path as input                                      //
-//        char* fileName -> file name that appended                                  //
-// output:                                                                           //
-// purpose: Receives an absolute path as input, along with a file name to be         //
-//          appended, and generates a new array representing the concatenated path.  //
-///////////////////////////////////////////////////////////////////////////////////////
-void joinPathAndFileName(char* path, char* Apath, char* fileName) {
-
-    strcpy(path, Apath); //입력받은 경로 불러오기
-    strcat(path, "/"); // /를 붙이고
-    strcat(path, fileName); //읽어온 파일명 붙이기
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
