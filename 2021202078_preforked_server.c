@@ -9,7 +9,7 @@
 // Descriptions : Modify the result of Assignment 2-2 to allow multiple connections  //
 //                and access control. The record of multiple connections should be   //
 //                displayed through the "history" output, and access control should  //
-//                be carried out by allowing only the IP addresses listed in a file. //                                            //
+//                be carried out by allowing only the IP addresses listed in a file. //                                             
 ///////////////////////////////////////////////////////////////////////////////////////
 
 #define _GNU_SOURCE
@@ -56,6 +56,7 @@ void shiftSturct();
 void sendResponse(char* url, char* response_header, int isNotStart, int client_fd);
 void listDirFiles(int a_hidden, int l_format, int S_size, int r_reverse, int h_readable, char* filename, FILE *file, char* sendArray);
 void getAbsolutePath(char *inputPath, char *absolutePath);
+void removeDuplicateChars(char* str);
 void joinPathAndFileName(char* path, char* Apath, char* fileName);
 void sortByNameInAscii(char **fileList, int fileNum, int start, int r_reverse);
 void printPermissions(mode_t mode, FILE *file, char* sendArray);
@@ -127,50 +128,49 @@ int main() {
             return 0; //프로그램 종료
         }
 
+        inet_clinet_address.s_addr = client_addr.sin_addr.s_addr; // 클라이언트 주소 정보 저장
+        if (read(client_fd, buf, BUFSIZE) == 0) 
+            continue;
+        
+        strcpy(tmp, buf);
+
+        tok = strtok(tmp, " "); // HTTP 요청 메소드 받음
+        strcpy(method, tok);    // method에 tok 내용 저장
+        if (strcmp(method, "GET") == 0) { // GET 요청인 경우
+            tok = strtok(NULL, " "); // 요청한 URL 주소 받음
+            strcpy(url, tok);        // url에 tok 내용 저장
+        }
+        removeDuplicateChars(url);
+
+        if (strcmp(url, "/favicon.ico") == 0) // url이 /favicon.ico인 경우 무시
+            continue;
+
+        if(isAccesible(inet_ntoa(client_addr.sin_addr), response_header, client_fd) == 0)
+            continue;
+
         pid = fork();
+        if (pid < 0) { // 프로세스 생성 실패 시
+            printf("Server : fork failed\n"); //실패 문구 출력
+            continue;
+        } 
 
-        if (pid == 0) { // 자식 프로세스
-
-            printf("========= New Client ============\nIP : %s\n Port : %d\n=================================\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력
-
-            inet_clinet_address.s_addr = client_addr.sin_addr.s_addr; //클라이언트 주소 정보 저장
-            read(client_fd, buf, BUFSIZE); //요청 메세지 read
-            strcpy(tmp, buf);
-
-            tok = strtok(tmp, " "); //HTTP 요청 메소드 받음
-            strcpy(method, tok); //method에 tok 내용 저장
-            if(strcmp(method, "GET") == 0) { //GET 요청인 경우
-                tok = strtok(NULL, " "); //요청한 URL 주소 받음
-                strcpy(url, tok); //url에 tok 내용 저장
-            }
-
-            if(strcmp(url, "/favicon.ico") == 0) //url이 /favicon.ico인 경우 무시
-                continue;
-
-            if(isAccesible(inet_ntoa(client_addr.sin_addr), response_header, client_fd) == 0) //접근 권한이 없는 IP인 경우 무시
-                continue;
+        else if (pid == 0) { // 자식 프로세스
             
+            printf("\n========= New Client ============\nIP : %s\n Port : %d\n=================================\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력
             sendResponse(url, response_header, isNotStart, client_fd); //아닌 경우, response 메세지 입력 및 출력
 
             close(client_fd);
-            printf("====== Disconnected Client ======\nIP : %s\n Port : %d\n=================================\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력  
+            printf("====== Disconnected Client ======\nIP : %s\n Port : %d\n=================================\n\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); // 연결된 클라이언트의 IP 주소 및 포트 번호 출력  
             
             exit(0); // 자식 프로세스 종료
-        }
-
-        else if (pid < 0) { // 프로세스 생성 실패 시
-            printf("Server : fork failed\n"); //실패 문구 출력
-            continue;
         }
 
         else { //부모 프로세스인 경우
             
             ++request; //누적 접속 기록 개수 증가
-
-            if(request < 11) {
+            if(request < 11) 
                 saveConnectHistory(client_addr, &client_info[request -1]);
-            }
-
+            
             else {
                 shiftSturct();
                 saveConnectHistory(client_addr, &client_info[9]);
@@ -212,7 +212,7 @@ void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* clien
     time(&t);
     lt = localtime(&t);
     strftime(temp, 1024, "%c", lt);
-    strcpy(client_info->TIME, temp);
+    strcpy(client_info->TIME, temp);    
 }
 
 void shiftSturct() {
@@ -247,7 +247,7 @@ void printServerHistory(int sig) {
         if(request > 10)
             n = 10;
 
-        for(int i = 0; i < n; i++) 
+        for(int i = n-1; i >= 0; i--) 
             printf("%d\t%s\t%d\t%d\t%s\n", client_info[i].No, client_info[i].IP, client_info[i].PID, client_info[i].Port, client_info[i].TIME);
     }
     printf("================================================================\n");
@@ -398,6 +398,7 @@ int writeHTMLFile(char* url, char* sendArray) {
     struct dirent *dir; //dirent 구조체
     char Apath[MAX_LENGTH] = {'\0', }; //working directory의 절대 경로
     char title[MAX_LENGTH] = "dir_file_list.html"; // html 문서
+    char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
     
     FILE *file = fopen("test.html", "w"); //html 파일 생성 및 오픈
 
@@ -413,12 +414,7 @@ int writeHTMLFile(char* url, char* sendArray) {
 
     else { //root path가 아닌 경우
 
-        char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
-
-        printf("%s\n", dirPath);
-
-        sprintf(sendArray, "%s<h1>System Programming Http</h1>\n<br>\n", sendArray); //header 작성
-        
+        sprintf(sendArray, "%s<h1>System Programming Http</h1>\n<br>\n", sendArray); //header 작성   
         getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
         
         if(opendir(dirPath) == NULL) //url이 디렉토리가 아니라면 
@@ -547,16 +543,22 @@ void getAbsolutePath(char *inputPath, char *absolutePath) {
         strcpy(absolutePath, inputPath); //입력받은 경로로 절대경로 덮어쓰기
     else
         strcat(absolutePath, inputPath); //현재 경로에 입력받은 경로 이어붙이기
+        
+    removeDuplicateChars(absolutePath);
+}
 
-    int i, j, len = strlen(absolutePath); //만약 /가 중복될 경우 제거하는 과정
+void removeDuplicateChars(char* str) {
+
+    int i, j, len = strlen(str); //만약 /가 중복될 경우 제거하는 과정
     for (i = j = 0; i < len; i++) { //절대 경로를 순회하면서
-        if (i > 0 && absolutePath[i] == '/' && absolutePath[i-1] == '/') {
+        if (i > 0 && str[i] == '/' && str[i-1] == '/') {
             // do nothing
-        } else {
-            absolutePath[j++] = absolutePath[i]; //'/'를 제거하기 위해 한 칸씩 앞으로 땡기기
+        } 
+        else {
+            str[j++] = str[i]; //'/'를 제거하기 위해 한 칸씩 앞으로 땡기기
         }
     }
-    absolutePath[j] = '\0'; //마지막 문자를 null로 하여 문자열 마무리
+    str[j] = '\0'; //마지막 문자를 null로 하여 문자열 마무리
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -588,10 +590,10 @@ void joinPathAndFileName(char* path, char* Apath, char* fileName) {
 void printAttributes(struct stat fileStat, FILE* file, int h_readable, char *color, char* sendArray) {
     
     char timeBuf[80]; //시간 정보 받아올 변수
-    printType(fileStat, file, sendArray); // 파일 유형
-    printPermissions(fileStat.st_mode, file, sendArray); // 허가권
-    sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_nlink); // 링크 수
-    sprintf(sendArray, "%s<td>%s</td><td>%s</td>", sendArray, getpwuid(fileStat.st_uid)->pw_name, getgrgid(fileStat.st_gid)->gr_name); // 파일 소유자 및 파일 소유 그룹
+    printType(fileStat, file, sendArray); //파일 유형
+    printPermissions(fileStat.st_mode, file, sendArray); //허가권
+    sprintf(sendArray, "%s<td>%ld</td>", sendArray, fileStat.st_nlink); //링크 수
+    sprintf(sendArray, "%s<td>%s</td><td>%s</td>", sendArray, getpwuid(fileStat.st_uid)->pw_name, getgrgid(fileStat.st_gid)->gr_name); //파일 소유자 및 파일 소유 그룹
 
     if(h_readable == 1) { //만약 h 속성이 존재한다면
         
