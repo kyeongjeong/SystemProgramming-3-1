@@ -49,7 +49,10 @@ struct ClientInfo {
 
 int request;
 struct ClientInfo client_info[10];
+static pid_t *pids;
 
+pid_t child_make(int i, int socketfd, int addrlen);
+void child_main(int i, int socketfd, int addrlen);
 void printServerHistory(int sig);
 void saveConnectHistory(struct sockaddr_in client_addr, struct ClientInfo* client_info);
 void shiftSturct();
@@ -66,6 +69,7 @@ void printAttributes(struct stat fileStat, char *color, char* sendArray);
 int compareStringUpper(char* fileName1, char* fileName2);
 int writeLsPage(char* url, char* sendArray);
 int isAccesible(char* inputIP, char* response_header, int client_fd);
+int isExist(int client_fd, char* response_header, char* url);
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // main                                                                              //
@@ -105,9 +109,18 @@ int main() {
         printf("Server : can't listen\n");
         return 0;
     }
-    
+
     signal(SIGALRM, printServerHistory);
     alarm(10);
+
+    pids = (pid_t *)malloc(5 * sizeof(pid_t));
+    int addrlen = sizeof(client_addr);
+
+    for(int i = 0; i < 5; i++)
+        pids[i] = child_make(1, socket_fd, addrlen);
+
+    for(;;)
+        pause();
 
     while(1) {
         
@@ -129,11 +142,10 @@ int main() {
         }
 
         inet_clinet_address.s_addr = client_addr.sin_addr.s_addr; // 클라이언트 주소 정보 저장
-        if (read(client_fd, buf, BUFSIZE) == 0) 
+        if (read(client_fd, buf, BUFSIZE) == 0) // 읽어올 수 있는 데이터가 없는 경우
             continue;
         
         strcpy(tmp, buf);
-
         tok = strtok(tmp, " "); // HTTP 요청 메소드 받음
         strcpy(method, tok);    // method에 tok 내용 저장
         if (strcmp(method, "GET") == 0) { // GET 요청인 경우
@@ -145,10 +157,12 @@ int main() {
         if (strcmp(url, "/favicon.ico") == 0) // url이 /favicon.ico인 경우 무시
             continue;
 
-        if(isAccesible(inet_ntoa(client_addr.sin_addr), response_header, client_fd) == 0)
+        if(isAccesible(inet_ntoa(client_addr.sin_addr), response_header, client_fd) == 0) //접근 권한이 없는 IP일 경우도 에러창 후 무시
             continue;
 
-        pid = fork();
+        if(isExist(client_fd, response_header, url) == 1) //존재하지 않는 디렉토리게 대한 접근도 에러창 후 무시
+            continue;
+        
         if (pid < 0) { // 프로세스 생성 실패 시
             printf("Server : fork failed\n"); //실패 문구 출력
             continue;
@@ -169,8 +183,7 @@ int main() {
             
             ++request; //누적 접속 기록 개수 증가
             if(request < 11) 
-                saveConnectHistory(client_addr, &client_info[request -1]);
-            
+                saveConnectHistory(client_addr, &client_info[request -1]);            
             else {
                 shiftSturct();
                 saveConnectHistory(client_addr, &client_info[9]);
@@ -187,6 +200,47 @@ int main() {
     close(socket_fd); //socket descriptor close
     return 0; //프로그램 종료
 }
+
+pid_t child_make(int i, int socketfd, int addrlen) {
+
+    pid_t pid;
+
+    if((pid = fork()) > 0)
+        return pid;
+    
+    child_main(i, socketfd, addrlen);
+}
+
+void child_main(int i, int socketfd, int addrlen)
+{
+    int client_fd, len_out;
+    char buf[BUFSIZE];
+    socklen_t clilen;
+    struct sockaddr *client_addr;
+
+    client_addr = (struct sockaddr *)malloc(addrlen);
+    printf("child %ld starting\n", (long)getpid());
+
+    while(1){
+
+        clilen = addrlen;
+
+        if((client_fd = accept(socketfd, client_addr, &clilen)) < 0) {
+            printf("Server: accept failed: \n");
+            return;
+        }
+
+        while((len_out = read(client_fd, buf, sizeof(buf)))>0) {
+            printf("\n%s", buf);
+            printf("child %ld processing request\n", (long)getpid());
+            write(client_fd, buf, len_out);
+            memset(buf, 0, sizeof(buf));
+        }
+        close(client_fd);
+        printf("child %ld: client closed conn\n", (long)getpid());
+    }
+
+} 
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // saveConnectHistory                                                                //
@@ -314,20 +368,6 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     char *response_message = NULL; //서버의 응답 메세지
     char *sendArray = (char *) malloc(SEND_ARRAY_LEN * sizeof(char));
 
-    if(isNotStart == 0) //root path로 접근할 때(처음 접속)
-        isNotFound = writeLsPage(url, sendArray); //존재하는 디렉토리인지 확인
-    
-    if (isNotFound == 1) { //존재하지 않는 디렉토리라면
-        
-        char error_message[MAX_LENGTH]; //서버의 에러 응답 메세지
-        sprintf(error_message, "<h1>Not Found</h1><br>The request URL %s was not found on this server<br>HTTP 404 - Not Page Found", url); //에러 메세지 설정
-        sprintf(response_header, "HTTP/1.0 404\r\nServer: 2023 web server\r\nContent-length: %ld\r\nContent-Type: text/html\r\n\r\n", strlen(error_message)+1); //헤더 메세지 설정
-        
-        write(client_fd, response_header, strlen(response_header)); //응답 메세지 헤더 write
-        write(client_fd, error_message, strlen(error_message) + 1); //에러 응답 메세지 write
-        return; //함수 종료
-    }
-
     //이미지 파일인 경우
     if ((fnmatch("*.jpg", url, FNM_CASEFOLD) == 0) || (fnmatch("*.png", url, FNM_CASEFOLD) == 0) || (fnmatch("*.jpeg", url, FNM_CASEFOLD) == 0)) 
         strcpy(content_type, "image/*"); //content-type을 image/*로 설정
@@ -383,6 +423,25 @@ void sendResponse(char* url, char* response_header, int isNotStart, int client_f
     sprintf(response_header, "HTTP/1.0 200 OK\r\nServer: 2023 web server\r\nContent-length: %d\r\nContent-Type: %s\r\n\r\n", count+1, content_type); //서버 응답 메세지 헤더 설정
     write(client_fd, response_header, strlen(response_header)); //서버 응답 메세지 헤더 출력
     write(client_fd, response_message, count+1); //서버 응답 메세지 출력
+}
+
+int isExist(int client_fd, char* response_header, char* url) {
+
+    char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
+    getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
+        
+    if(opendir(dirPath) == NULL) { //url이 디렉토리가 아니라면 
+
+        char error_message[MAX_LENGTH]; //서버의 에러 응답 메세지
+
+        sprintf(error_message, "<h1>Not Found</h1><br>The request URL %s was not found on this server<br>HTTP 404 - Not Page Found", url); //에러 메세지 설정
+        sprintf(response_header, "HTTP/1.0 404\r\nServer: 2023 web server\r\nContent-length: %ld\r\nContent-Type: text/html\r\n\r\n", strlen(error_message)+1); //헤더 메세지 설정
+        
+        write(client_fd, response_header, strlen(response_header) + 1); //응답 메세지 헤더 write
+        write(client_fd, error_message, strlen(error_message) + 1); //에러 응답 메세지 write
+        return 1;
+    }
+    return 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -442,15 +501,15 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
     int fileNum = 0, realfileNum = 0; //파일의 개수
     char timeBuf[80]; //시간 정보
     int total = 0; //총 블락 수
+    char exePath[MAX_LENGTH];
     char accessPath[MAX_LENGTH], accessFilename[MAX_LENGTH], dirPath[MAX_LENGTH] = {'\0', }; //여러 경로들
     int* isHidden = (int*)calloc(fileNum, sizeof(int)); //히든파일 여부 판별
 
     getAbsolutePath(filename, dirPath);
     dirp = opendir(dirPath); //절대경로로 opendir
 
-    char temp[MAX_LENGTH];
-    getcwd(temp, MAX_LENGTH);
-    if(strcmp(dirPath, temp) == 0)
+    getcwd(exePath, MAX_LENGTH);
+    if(strcmp(dirPath, exePath) == 0)
         a_hidden = 0;
 
     while((dir = readdir(dirp)) != NULL) { //디렉토리 하위 파일들을 읽어들임
@@ -477,9 +536,7 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
 
     sortByNameInAscii(fileList, fileNum, 0); //아스키 코드순으로 정렬
     sprintf(sendArray, "%s<b>Directory path: %s</b><br>\n", sendArray, dirPath); //파일 경로 출력
-    
-    if(l_format == 1) //옵션 -l이 포함된 경우
-        sprintf(sendArray, "%s<b>total : %d</b>\n", sendArray, (int)(total/2));
+    sprintf(sendArray, "%s<b>total : %d</b>\n", sendArray, (int)(total/2));
 
     if(realfileNum == 0) { //만약 html 실행 파일과 히든 파일을 제외한 파일이 없다면
         sprintf(sendArray, "%s<br><br>\n", sendArray);
@@ -487,16 +544,12 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
     }
 
     sprintf(sendArray, "%s<table border=\"1\">\n<tr>\n<th>Name</th>\n", sendArray); // 테이블 생성
-    if (l_format == 1) {
-        sprintf(sendArray, "%s<th>Permissions</th>\n", sendArray);        // 권한 열 생성
-        sprintf(sendArray, "%s<th>Link</th>\n", sendArray);               // 링크 열 생성
-        sprintf(sendArray, "%s<th>Owner</th>\n", sendArray);              // 소유자 열 생성
-        sprintf(sendArray, "%s<th>Group</th>\n", sendArray);              // 소유 그룹 열 생성
-        sprintf(sendArray, "%s<th>Size</th>\n", sendArray);               // 사이즈 열 생성
-        sprintf(sendArray, "%s<th>Last Modified</th>\n</tr>", sendArray); // 마지막 수정날짜 열 생성
-    }
-    else
-        sprintf(sendArray, "%s</tr>", sendArray); //header raw 닫기
+    sprintf(sendArray, "%s<th>Permissions</th>\n", sendArray);                      // 권한 열 생성
+    sprintf(sendArray, "%s<th>Link</th>\n", sendArray);                             // 링크 열 생성
+    sprintf(sendArray, "%s<th>Owner</th>\n", sendArray);                            // 소유자 열 생성
+    sprintf(sendArray, "%s<th>Group</th>\n", sendArray);                            // 소유 그룹 열 생성
+    sprintf(sendArray, "%s<th>Size</th>\n", sendArray);                             // 사이즈 열 생성
+    sprintf(sendArray, "%s<th>Last Modified</th>\n</tr>", sendArray);               // 마지막 수정날짜 열 생성
 
     for (int i = 0; i < fileNum; i++) { // 파일 개수만큼 반복
 
@@ -504,19 +557,25 @@ void listDirFiles(int a_hidden, int l_format, char* filename, char* sendArray) {
             continue;
 
         joinPathAndFileName(accessPath, dirPath, fileList[i]); // 파일과 경로를 이어붙이기
+        removeDuplicateChars(accessPath);
         lstat(accessPath, &fileStat);                           // 파일 속성정보 불러옴
 
         char color[20] = {'\0',}; // 파일의 색상 저장할 배열
         findColor(accessPath, color); // 색 찾기
 
+        int n = strlen(exePath);
+        char* p = strstr(accessPath, exePath);
+        while (p = strstr(accessPath, exePath)) {
+            char *q = p + n;
+            while (*q)
+                *p++ = *q++;
+            *p = '\0';
+        }
+
         sprintf(sendArray, "%s<tr style=\"%s\">\n", sendArray, color);
         sprintf(sendArray, "%s<td><a href=%s>%s</a></td>", sendArray, accessPath, fileList[i]); // 파일 이름 및 링크 출력
 
-        if (l_format == 1)                                      // 옵션 -l이 포함된 경우
-            printAttributes(fileStat, color, sendArray); // 속성 정보 출력
-
-        else
-            sprintf(sendArray, "%s</tr>", sendArray); //raw 닫기
+        printAttributes(fileStat, color, sendArray); // 속성 정보 출력
     }
     sprintf(sendArray, "%s</table>\n<br>\n", sendArray); //table 닫기
 }
