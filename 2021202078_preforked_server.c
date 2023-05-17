@@ -287,13 +287,13 @@ void parentSignalHandler(int sig) {
             time(&t);  // 현재 시간을 t 변수에 저장
             lt = localtime(&t);  // t 변수를 이용해 로컬 시간 구조체 포인터를 얻음
             strftime(temp, 1024, "%c", lt);  // 로컬 시간을 temp 문자열에 포맷팅하여 저장
-            printf("[%s] %d process is terminated\n", temp, pids[i]);
+            printf("[%s] %d process is terminated\n", temp, pids[i]); //자식 프로세스의 종료를 알림
         }
 
         time(&t);  // 현재 시간을 t 변수에 저장
         lt = localtime(&t);  // t 변수를 이용해 로컬 시간 구조체 포인터를 얻음
         strftime(temp, 1024, "%c", lt);  // 로컬 시간을 temp 문자열에 포맷팅하여 저장
-        printf("[%s] Server is terminated\n", temp);
+        printf("[%s] Server is terminated\n", temp); //서버(부모 프로세스)의 종료를 알림
         exit(0);
     }
 }
