@@ -361,7 +361,7 @@ void saveConnectHistory(struct sockaddr_in client_addr) {
     time(&t); // 현재 시간 저장
     lt = localtime(&t); // 현재 시간의 로컬 시간 정보 저장
     strftime(temp, 1024, "%c", lt); // 시간 정보를 문자열로 변환하여 temp에 저장
-    strcpy(client_info->TIME, temp); // 클라이언트의 연결 시간을 저장   
+    strcpy(client_info[n].TIME, temp); // 클라이언트의 연결 시간을 저장   
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////
