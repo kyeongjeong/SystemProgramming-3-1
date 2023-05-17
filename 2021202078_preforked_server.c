@@ -233,7 +233,7 @@ void child_main(int i, int socket_fd, int addrlen)
         if(isAccesible(inet_ntoa(client_addr.sin_addr), response_header, client_fd) == 0) //접근 권한이 없는 IP일 경우
             continue; // 무시 후 다시 연결 받기
 
-        if(isExist(client_fd, response_header, url) == 1) //존재하지 않는 디렉토리게 대한 접근
+        if(isExist(client_fd, response_header, url) == 1) //존재하지 않는 디렉토리에 대한 접근
             continue; // 무시 후 다시 연결 받기
 
         time(&t);  // 현재 시간을 t 변수에 저장
@@ -418,9 +418,8 @@ int isExist(int client_fd, char* response_header, char* url) {
     char dirPath[MAX_LENGTH] = {'\0', }; //절대경로를 받아올 배열
     getAbsolutePath(url, dirPath); //dirPath에 url의 절대경로를 받아오기
     removeDuplicateChars(dirPath); //dirPath에서 연속으로 중복된 /제거
-    lstat(dirPath, &st); //disPath의 파일 정보 불러오기
-
-    if(((st.st_mode & S_IFMT)==S_IFDIR) && (opendir(dirPath) == NULL)) { //url이 디렉토리이고, 존재하지 않는다면
+    
+    if((lstat(dirPath, &st) == -1) || (((st.st_mode & S_IFMT)==S_IFDIR) && (opendir(dirPath) == NULL))) { //url이 디렉토리이고, 존재하지 않는다면
 
         char error_message[MAX_LENGTH]; //서버의 에러 응답 메세지
 
@@ -431,6 +430,7 @@ int isExist(int client_fd, char* response_header, char* url) {
         write(client_fd, error_message, strlen(error_message) + 1); //에러 응답 메세지 write
         return 1; //존재하지 않는 디렉토리임을 알리면서 반환
     }
+
     return 0; //존재하는 디렉토리임을 알리면서 반환
 }
 
